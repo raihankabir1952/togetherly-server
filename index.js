@@ -248,6 +248,68 @@ app.delete("/events/:id", async (req, res) => {
   }
 });
 
+
+app.get("/events/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid event ID.",
+      });
+    }
+
+    const db = getDB();
+
+    // Find event
+    const event = await db.collection("events").findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: "Event not found.",
+      });
+    }
+
+    // Find organizer from Better Auth user collection
+    const organizer = await db.collection("user").findOne(
+      { email: event.creatorEmail },
+      {
+        projection: {
+          _id: 1,
+          name: 1,
+          email: 1,
+          image: 1,
+        },
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      event,
+      organizer: organizer
+        ? {
+            id: organizer._id,
+            name: organizer.name,
+            email: organizer.email,
+            image: organizer.image,
+          }
+        : null,
+    });
+  } catch (error) {
+    console.error("Fetching event details failed:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch event details.",
+    });
+  }
+});
+
+
 // Start server
 async function startServer() {
   await connectToMongoDB();
