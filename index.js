@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import dotenv from "dotenv";
 import { connectToMongoDB, getDB } from "./config/db.js";
+import { ObjectId } from "mongodb";
 
 dotenv.config();
 
@@ -138,6 +139,111 @@ app.get("/my-events", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch your events.",
+    });
+  }
+});
+
+
+//Update Event: PUT /events/:id
+app.put("/events/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      title,
+      description,
+      eventType,
+      thumbnail,
+      location,
+      eventDate,
+      creatorEmail,
+    } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid event ID.",
+      });
+    }
+
+    const db = getDB();
+
+    const result = await db.collection("events").updateOne(
+      {
+        _id: new ObjectId(id),
+        creatorEmail,
+      },
+      {
+        $set: {
+          title,
+          description,
+          eventType,
+          thumbnail,
+          location,
+          eventDate: new Date(eventDate),
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Event not found or you are not authorized.",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Event updated successfully!",
+    });
+  } catch (error) {
+    console.error("Event update failed:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to update event.",
+    });
+  }
+});
+
+
+//Delete Event: DELETE /events/:id
+app.delete("/events/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email } = req.query;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid event ID.",
+      });
+    }
+
+    const db = getDB();
+
+    const result = await db.collection("events").deleteOne({
+      _id: new ObjectId(id),
+      creatorEmail: email,
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Event not found or you are not authorized.",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Event deleted successfully!",
+    });
+  } catch (error) {
+    console.error("Event deletion failed:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete event.",
     });
   }
 });
