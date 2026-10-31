@@ -521,6 +521,75 @@ app.delete("/events/:id/leave", async (req, res) => {
   }
 });
 
+
+app.get("/joined-events", async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "User email is required.",
+      });
+    }
+
+    const db = getDB();
+
+    const joinedEvents = await db
+      .collection("eventParticipants")
+      .aggregate([
+        {
+          $match: {
+            userEmail: email,
+          },
+        },
+        {
+          $lookup: {
+            from: "events",
+            localField: "eventId",
+            foreignField: "_id",
+            as: "event",
+          },
+        },
+        {
+          $unwind: "$event",
+        },
+        {
+          $project: {
+            _id: "$event._id",
+            title: "$event.title",
+            description: "$event.description",
+            eventType: "$event.eventType",
+            thumbnail: "$event.thumbnail",
+            location: "$event.location",
+            eventDate: "$event.eventDate",
+            creatorEmail: "$event.creatorEmail",
+            joinedAt: 1,
+          },
+        },
+        {
+          $sort: {
+            eventDate: 1,
+          },
+        },
+      ])
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      total: joinedEvents.length,
+      events: joinedEvents,
+    });
+  } catch (error) {
+    console.error("Fetching joined events failed:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch joined events.",
+    });
+  }
+});
+
 // Start server
 async function startServer() {
   await connectToMongoDB();
