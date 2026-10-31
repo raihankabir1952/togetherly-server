@@ -106,6 +106,42 @@ app.get("/events", async (req, res) => {
   }
 });
 
+
+// Get events created by a specific user
+app.get("/my-events", async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "User email is required.",
+      });
+    }
+
+    const db = getDB();
+
+    const events = await db
+      .collection("events")
+      .find({ creatorEmail: email })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      count: events.length,
+      events,
+    });
+  } catch (error) {
+    console.error("Fetching user events failed:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch your events.",
+    });
+  }
+});
+
 // Start server
 async function startServer() {
   await connectToMongoDB();
