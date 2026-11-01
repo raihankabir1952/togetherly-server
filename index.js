@@ -590,6 +590,60 @@ app.get("/joined-events", async (req, res) => {
   }
 });
 
+// Get Event Participants: GET /events/:id/participants
+app.get("/events/:id/participants", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid event ID",
+      });
+    }
+
+    const participants = await getDB()
+      .collection("eventParticipants")
+      .aggregate([
+        {
+          $match: {
+            eventId: new ObjectId(id),
+          },
+        },
+        {
+          $lookup: {
+            from: "user",
+            localField: "userEmail",
+            foreignField: "email",
+            as: "user",
+          },
+        },
+        {
+          $unwind: "$user",
+        },
+        {
+          $project: {
+            _id: 0,
+            name: "$user.name",
+            image: "$user.image",
+          },
+        },
+      ])
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      totalParticipants: participants.length,
+      participants,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch participants",
+    });
+  }
+});
+
 // Start server
 async function startServer() {
   await connectToMongoDB();
