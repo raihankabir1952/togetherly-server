@@ -3,29 +3,79 @@ import express from "express";
 import dotenv from "dotenv";
 import { connectToMongoDB, getDB } from "./config/db.js";
 import { ObjectId } from "mongodb";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
-
-app.use(express.json());
-
 app.use(
   cors({
     origin: "http://localhost:3000",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
 app.use(express.json());
+const PORT = process.env.PORT || 5000;
+
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.BETTER_AUTH_URL}/api/auth/jwks`)
+);
+
+// JWT Middleware
+const verifyToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    // Check Authorization Header
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required. Please log in to access this resource.",
+      });
+    }
+
+    // Extract Token
+    const token = authHeader.split(" ")[1];
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication token is missing. Please log in again.",
+      });
+    }
+
+    // Verify JWT
+    const { payload } = await jwtVerify(token, JWKS, {
+      issuer: "http://localhost:3000",
+      audience: "http://localhost:3000",
+    });
+
+    // Store Verified User Information
+    req.user = payload;
+
+    console.log("Token verified successfully!");
+
+    next();
+  } catch (error) {
+    console.error("Token validation failed:", error.message);
+
+    return res.status(401).json({
+      success: false,
+      message: "Your session is invalid or expired. Please log in again.",
+    });
+  }
+};
 
 // Home route
 app.get("/", (req, res) => {
   res.send("Togetherly Server is Running!");
 });
 
+
 // Create Event
-app.post("/events", async (req, res) => {
+app.post("/events", verifyToken, async (req, res) => {
   try {
     const {
       title,
@@ -34,8 +84,10 @@ app.post("/events", async (req, res) => {
       thumbnail,
       location,
       eventDate,
-      creatorEmail,
     } = req.body;
+
+    // Get verified user email from JWT
+    const creatorEmail = req.user.email;
 
     const newEvent = {
       title,
@@ -109,16 +161,10 @@ app.get("/events", async (req, res) => {
 
 
 // Get events created by a specific user
-app.get("/my-events", async (req, res) => {
+app.get("/my-events", verifyToken, async (req, res) => {
   try {
-    const { email } = req.query;
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: "User email is required.",
-      });
-    }
+    // Get authenticated user's email from JWT
+    const email = req.user.email;
 
     const db = getDB();
 
@@ -144,10 +190,11 @@ app.get("/my-events", async (req, res) => {
 });
 
 
-//Update Event: PUT /events/:id
-app.put("/events/:id", async (req, res) => {
+// Update Event: PUT /events/:id
+app.put("/events/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
+
     const {
       title,
       description,
@@ -155,8 +202,10 @@ app.put("/events/:id", async (req, res) => {
       thumbnail,
       location,
       eventDate,
-      creatorEmail,
     } = req.body;
+
+    // Get authenticated user's email from JWT
+    const creatorEmail = req.user.email;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
