@@ -1,3 +1,4 @@
+
 import cors from "cors";
 import express from "express";
 import dotenv from "dotenv";
@@ -8,20 +9,78 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 dotenv.config();
 
 const app = express();
+const PORT = process.env.PORT || 5000;
+
+// Validate required environment variables
+if (!process.env.CLIENT_URL || !process.env.BETTER_AUTH_URL) {
+  throw new Error("CLIENT_URL and BETTER_AUTH_URL must be configured.");
+}
+
+// Middleware
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: process.env.CLIENT_URL,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
 app.use(express.json());
-const PORT = process.env.PORT || 5000;
 
+// Better Auth JWKS
 const JWKS = createRemoteJWKSet(
   new URL(`${process.env.BETTER_AUTH_URL}/api/auth/jwks`)
 );
+
+// Helper: Validate event fields
+function validateEventData({
+  title,
+  description,
+  eventType,
+  thumbnail,
+  location,
+  eventDate,
+}) {
+  if (
+    typeof title !== "string" ||
+    !title.trim() ||
+    typeof description !== "string" ||
+    !description.trim() ||
+    typeof eventType !== "string" ||
+    !eventType.trim() ||
+    typeof thumbnail !== "string" ||
+    !thumbnail.trim() ||
+    typeof location !== "string" ||
+    !location.trim() ||
+    !eventDate
+  ) {
+    return {
+      valid: false,
+      message: "All fields are required.",
+    };
+  }
+
+  const parsedEventDate = new Date(eventDate);
+
+  if (Number.isNaN(parsedEventDate.getTime())) {
+    return {
+      valid: false,
+      message: "Invalid event date.",
+    };
+  }
+
+  if (parsedEventDate <= new Date()) {
+    return {
+      valid: false,
+      message: "Event date must be in the future.",
+    };
+  }
+
+  return {
+    valid: true,
+    parsedEventDate,
+  };
+}
 
 // JWT Middleware
 const verifyToken = async (req, res, next) => {
@@ -48,14 +107,20 @@ const verifyToken = async (req, res, next) => {
 
     // Verify JWT
     const { payload } = await jwtVerify(token, JWKS, {
-      issuer: "http://localhost:3000",
-      audience: "http://localhost:3000",
+      issuer: process.env.BETTER_AUTH_URL,
+      audience: process.env.BETTER_AUTH_URL,
     });
+
+    // Validate user email
+    if (!payload.email || typeof payload.email !== "string") {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid authentication token. User email is missing.",
+      });
+    }
 
     // Store Verified User Information
     req.user = payload;
-
-    console.log("Token verified successfully!");
 
     next();
   } catch (error) {
@@ -73,8 +138,7 @@ app.get("/", (req, res) => {
   res.send("Togetherly Server is Running!");
 });
 
-
-// Create Event
+// Create Event: POST /events
 app.post("/events", verifyToken, async (req, res) => {
   try {
     const {
@@ -86,22 +150,36 @@ app.post("/events", verifyToken, async (req, res) => {
       eventDate,
     } = req.body;
 
-    // Get verified user email from JWT
     const creatorEmail = req.user.email;
 
-    const newEvent = {
+    const validation = validateEventData({
       title,
       description,
       eventType,
       thumbnail,
       location,
-      eventDate: new Date(eventDate),
+      eventDate,
+    });
+
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: validation.message,
+      });
+    }
+
+    const newEvent = {
+      title: title.trim(),
+      description: description.trim(),
+      eventType: eventType.trim(),
+      thumbnail: thumbnail.trim(),
+      location: location.trim(),
+      eventDate: validation.parsedEventDate,
       creatorEmail,
       createdAt: new Date(),
     };
 
     const db = getDB();
-
     const result = await db.collection("events").insertOne(newEvent);
 
     res.status(201).json({
@@ -119,12 +197,16 @@ app.post("/events", verifyToken, async (req, res) => {
   }
 });
 
-// Get Upcoming Events
+// Get Upcoming Events: GET /events
 app.get("/events", async (req, res) => {
   try {
     const db = getDB();
 
-    const limit = Number.parseInt(req.query.limit, 10);
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const limit =
+      Number.isInteger(requestedLimit) && requestedLimit > 0
+        ? Math.min(requestedLimit, 100)
+        : null;
 
     const query = {
       eventDate: {
@@ -137,8 +219,7 @@ app.get("/events", async (req, res) => {
       .find(query)
       .sort({ eventDate: 1 });
 
-    // Apply limit only when a valid limit is provided
-    if (Number.isInteger(limit) && limit > 0) {
+    if (limit) {
       eventsQuery = eventsQuery.limit(limit);
     }
 
@@ -159,13 +240,10 @@ app.get("/events", async (req, res) => {
   }
 });
 
-
-// Get events created by a specific user
+// Get events created by a specific user: GET /my-events
 app.get("/my-events", verifyToken, async (req, res) => {
   try {
-    // Get authenticated user's email from JWT
     const email = req.user.email;
-
     const db = getDB();
 
     const events = await db
@@ -189,11 +267,17 @@ app.get("/my-events", verifyToken, async (req, res) => {
   }
 });
 
-
 // Update Event: PUT /events/:id
 app.put("/events/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid event ID.",
+      });
+    }
 
     const {
       title,
@@ -204,13 +288,21 @@ app.put("/events/:id", verifyToken, async (req, res) => {
       eventDate,
     } = req.body;
 
-    // Get authenticated user's email from JWT
     const creatorEmail = req.user.email;
 
-    if (!ObjectId.isValid(id)) {
+    const validation = validateEventData({
+      title,
+      description,
+      eventType,
+      thumbnail,
+      location,
+      eventDate,
+    });
+
+    if (!validation.valid) {
       return res.status(400).json({
         success: false,
-        message: "Invalid event ID.",
+        message: validation.message,
       });
     }
 
@@ -223,12 +315,12 @@ app.put("/events/:id", verifyToken, async (req, res) => {
       },
       {
         $set: {
-          title,
-          description,
-          eventType,
-          thumbnail,
-          location,
-          eventDate: new Date(eventDate),
+          title: title.trim(),
+          description: description.trim(),
+          eventType: eventType.trim(),
+          thumbnail: thumbnail.trim(),
+          location: location.trim(),
+          eventDate: validation.parsedEventDate,
           updatedAt: new Date(),
         },
       }
@@ -255,13 +347,10 @@ app.put("/events/:id", verifyToken, async (req, res) => {
   }
 });
 
-
 // Delete Event: DELETE /events/:id
 app.delete("/events/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-
-    // Get email from verified JWT
     const email = req.user.email;
 
     if (!ObjectId.isValid(id)) {
@@ -272,6 +361,7 @@ app.delete("/events/:id", verifyToken, async (req, res) => {
     }
 
     const db = getDB();
+
     const result = await db.collection("events").deleteOne({
       _id: new ObjectId(id),
       creatorEmail: email,
@@ -283,6 +373,11 @@ app.delete("/events/:id", verifyToken, async (req, res) => {
         message: "Event not found or you are not authorized to delete it.",
       });
     }
+
+    // Remove participant records when the event is deleted
+    await db.collection("eventParticipants").deleteMany({
+      eventId: new ObjectId(id),
+    });
 
     res.status(200).json({
       success: true,
@@ -298,7 +393,7 @@ app.delete("/events/:id", verifyToken, async (req, res) => {
   }
 });
 
-
+// Get Event Details: GET /events/:id
 app.get("/events/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -312,7 +407,6 @@ app.get("/events/:id", async (req, res) => {
 
     const db = getDB();
 
-    // Find event
     const event = await db.collection("events").findOne({
       _id: new ObjectId(id),
     });
@@ -342,11 +436,11 @@ app.get("/events/:id", async (req, res) => {
       event,
       organizer: organizer
         ? {
-          id: organizer._id,
-          name: organizer.name,
-          email: organizer.email,
-          image: organizer.image,
-        }
+            id: organizer._id,
+            name: organizer.name,
+            email: organizer.email,
+            image: organizer.image,
+          }
         : null,
     });
   } catch (error) {
@@ -363,11 +457,8 @@ app.get("/events/:id", async (req, res) => {
 app.post("/events/:id/join", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-
-    // Get email from verified JWT
     const email = req.user.email;
 
-    // Validate event ID
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
@@ -377,7 +468,6 @@ app.post("/events/:id/join", verifyToken, async (req, res) => {
 
     const db = getDB();
 
-    // Find event
     const event = await db.collection("events").findOne({
       _id: new ObjectId(id),
     });
@@ -397,21 +487,18 @@ app.post("/events/:id/join", verifyToken, async (req, res) => {
       });
     }
 
-    // Prevent joining past events
-    if (new Date(event.eventDate) <= new Date()) {
+    // Validate event date
+    const parsedEventDate = new Date(event.eventDate);
+
+    if (
+      Number.isNaN(parsedEventDate.getTime()) ||
+      parsedEventDate <= new Date()
+    ) {
       return res.status(400).json({
         success: false,
-        message: "This event has already started.",
+        message: "This event has already started or has an invalid date.",
       });
     }
-
-    const participantsCollection = db.collection("eventParticipants");
-
-    // Prevent duplicate joins at database level
-    await participantsCollection.createIndex(
-      { eventId: 1, userEmail: 1 },
-      { unique: true }
-    );
 
     const participant = {
       eventId: new ObjectId(id),
@@ -419,7 +506,7 @@ app.post("/events/:id/join", verifyToken, async (req, res) => {
       joinedAt: new Date(),
     };
 
-    await participantsCollection.insertOne(participant);
+    await db.collection("eventParticipants").insertOne(participant);
 
     res.status(201).json({
       success: true,
@@ -446,8 +533,6 @@ app.post("/events/:id/join", verifyToken, async (req, res) => {
 app.get("/events/:id/join-status", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-
-    // Get email from verified JWT
     const email = req.user.email;
 
     if (!ObjectId.isValid(id)) {
@@ -470,12 +555,10 @@ app.get("/events/:id/join-status", verifyToken, async (req, res) => {
       });
     }
 
-    const participant = await db
-      .collection("eventParticipants")
-      .findOne({
-        eventId: new ObjectId(id),
-        userEmail: email,
-      });
+    const participant = await db.collection("eventParticipants").findOne({
+      eventId: new ObjectId(id),
+      userEmail: email,
+    });
 
     res.status(200).json({
       success: true,
@@ -496,8 +579,6 @@ app.get("/events/:id/join-status", verifyToken, async (req, res) => {
 app.delete("/events/:id/leave", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-
-    // Get email from verified JWT
     const email = req.user.email;
 
     if (!ObjectId.isValid(id)) {
@@ -528,12 +609,10 @@ app.delete("/events/:id/leave", verifyToken, async (req, res) => {
       });
     }
 
-    const result = await db
-      .collection("eventParticipants")
-      .deleteOne({
-        eventId: new ObjectId(id),
-        userEmail: email,
-      });
+    const result = await db.collection("eventParticipants").deleteOne({
+      eventId: new ObjectId(id),
+      userEmail: email,
+    });
 
     if (result.deletedCount === 0) {
       return res.status(404).json({
@@ -555,12 +634,11 @@ app.delete("/events/:id/leave", verifyToken, async (req, res) => {
     });
   }
 });
+
 // Get Joined Events: GET /joined-events
 app.get("/joined-events", verifyToken, async (req, res) => {
   try {
-    // Get email from verified JWT
     const email = req.user.email;
-
     const db = getDB();
 
     const joinedEvents = await db
@@ -618,7 +696,6 @@ app.get("/joined-events", verifyToken, async (req, res) => {
   }
 });
 
-
 // Get Event Participants: GET /events/:id/participants
 app.get("/events/:id/participants", async (req, res) => {
   try {
@@ -627,11 +704,25 @@ app.get("/events/:id/participants", async (req, res) => {
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid event ID",
+        message: "Invalid event ID.",
       });
     }
 
-    const participants = await getDB()
+    const db = getDB();
+
+    // Check whether the event exists
+    const event = await db.collection("events").findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: "Event not found.",
+      });
+    }
+
+    const participants = await db
       .collection("eventParticipants")
       .aggregate([
         {
@@ -666,20 +757,35 @@ app.get("/events/:id/participants", async (req, res) => {
       participants,
     });
   } catch (error) {
+    console.error("Fetching participants failed:", error);
+
     res.status(500).json({
       success: false,
-      message: "Failed to fetch participants",
+      message: "Failed to fetch participants.",
     });
   }
 });
 
-// Start server
+// Start Server
 async function startServer() {
-  await connectToMongoDB();
+  try {
+    await connectToMongoDB();
 
-  app.listen(PORT, () => {
-    console.log(`Togetherly server running on port ${PORT}`);
-  });
+    // Create unique index once during server startup
+    await getDB()
+      .collection("eventParticipants")
+      .createIndex(
+        { eventId: 1, userEmail: 1 },
+        { unique: true }
+      );
+
+    app.listen(PORT, () => {
+      console.log(`Togetherly server running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("Server startup failed:", error);
+    process.exit(1);
+  }
 }
 
 startServer();
