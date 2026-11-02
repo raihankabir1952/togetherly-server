@@ -256,11 +256,13 @@ app.put("/events/:id", verifyToken, async (req, res) => {
 });
 
 
-//Delete Event: DELETE /events/:id
-app.delete("/events/:id", async (req, res) => {
+// Delete Event: DELETE /events/:id
+app.delete("/events/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { email } = req.query;
+
+    // Get email from verified JWT
+    const email = req.user.email;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
@@ -270,7 +272,6 @@ app.delete("/events/:id", async (req, res) => {
     }
 
     const db = getDB();
-
     const result = await db.collection("events").deleteOne({
       _id: new ObjectId(id),
       creatorEmail: email,
@@ -279,7 +280,7 @@ app.delete("/events/:id", async (req, res) => {
     if (result.deletedCount === 0) {
       return res.status(404).json({
         success: false,
-        message: "Event not found or you are not authorized.",
+        message: "Event not found or you are not authorized to delete it.",
       });
     }
 
@@ -358,27 +359,19 @@ app.get("/events/:id", async (req, res) => {
   }
 });
 
-
-
-
-app.post("/events/:id/join", async (req, res) => {
+// Join Event: POST /events/:id/join
+app.post("/events/:id/join", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { email } = req.body;
+
+    // Get email from verified JWT
+    const email = req.user.email;
 
     // Validate event ID
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
         message: "Invalid event ID.",
-      });
-    }
-
-    // Validate user email
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: "User email is required.",
       });
     }
 
@@ -449,22 +442,18 @@ app.post("/events/:id/join", async (req, res) => {
   }
 });
 
-app.get("/events/:id/join-status", async (req, res) => {
+// Check Join Status: GET /events/:id/join-status
+app.get("/events/:id/join-status", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { email } = req.query;
+
+    // Get email from verified JWT
+    const email = req.user.email;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
         message: "Invalid event ID.",
-      });
-    }
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: "User email is required.",
       });
     }
 
@@ -503,22 +492,18 @@ app.get("/events/:id/join-status", async (req, res) => {
   }
 });
 
-app.delete("/events/:id/leave", async (req, res) => {
+// Leave Event: DELETE /events/:id/leave
+app.delete("/events/:id/leave", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { email } = req.query;
+
+    // Get email from verified JWT
+    const email = req.user.email;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
         message: "Invalid event ID.",
-      });
-    }
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: "User email is required.",
       });
     }
 
@@ -535,6 +520,7 @@ app.delete("/events/:id/leave", async (req, res) => {
       });
     }
 
+    // Prevent organizer from leaving own event
     if (event.creatorEmail === email) {
       return res.status(403).json({
         success: false,
@@ -569,18 +555,11 @@ app.delete("/events/:id/leave", async (req, res) => {
     });
   }
 });
-
-
-app.get("/joined-events", async (req, res) => {
+// Get Joined Events: GET /joined-events
+app.get("/joined-events", verifyToken, async (req, res) => {
   try {
-    const { email } = req.query;
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: "User email is required.",
-      });
-    }
+    // Get email from verified JWT
+    const email = req.user.email;
 
     const db = getDB();
 
@@ -638,6 +617,7 @@ app.get("/joined-events", async (req, res) => {
     });
   }
 });
+
 
 // Get Event Participants: GET /events/:id/participants
 app.get("/events/:id/participants", async (req, res) => {
